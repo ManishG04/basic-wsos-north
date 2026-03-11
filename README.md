@@ -77,6 +77,49 @@ What the diagram shows: Lambda inside a VPC talking to RDS, and also talking to 
 
 What you must build: You must provision a NAT Gateway in a public subnet, or the Lambda will time out trying to reach the internet.
 
+## VPC Peering
+The Request: Go to the VPC Console -> Peering Connections -> Create peering connection.
+
+Select your starting VPC (The Requester).
+
+Select the target VPC (The Accepter). Note: This can be in your account, another AWS account, or even a completely different AWS Region!
+
+The Handshake: If the Accepter VPC is in your account and region, you just select the pending connection and click Actions -> Accept Request. (If it's in another account, you have to log into that account to accept it).
+
+The Routes (Crucial): A peering connection is just a cable. Data won't flow unless you give it directions. Go to the Route Tables for both VPCs.
+
+In VPC A's Route Table: Add a route where the Destination is VPC B's CIDR block (e.g., 10.2.0.0/16), and the Target is the Peering Connection (pcx-12345678).
+
+In VPC B's Route Table: Add the reverse route pointing back to VPC A.
+
+The Security: Go to the Security Groups of the resources (like EC2 or RDS) inside the VPCs. Update the Inbound rules to allow traffic (e.g., Port 3306 for MySQL) from the peered VPC's CIDR block.
+
+🚨 The VPC Peering "Fault Finding" Traps
+If the judges give you a broken VPC Peering setup tomorrow, it will almost certainly be one of these three things:
+
+Trap 1: Overlapping CIDR Blocks (The Fatal Flaw)
+The Fault: You cannot peer two VPCs if they have the exact same IP address range (e.g., both are 10.0.0.0/16). The router wouldn't know which VPC a packet belongs to.
+
+The Fix: This is an architectural failure. You literally cannot fix this without tearing down one of the VPCs and rebuilding it with a different CIDR block (like 10.1.0.0/16). If the competition asks you to peer them, check their IPv4 CIDRs first!
+
+Trap 2: The "One-Way Street" (Asymmetric Routing)
+The Fault: The prompt says "EC2 in VPC-A can ping EC2 in VPC-B, but VPC-B cannot initiate a connection back."
+
+The Fix: The architect forgot to update the Route Tables in both directions. VPC-A has a route to the pcx- connection, but VPC-B's route table is missing the return route.
+
+Trap 3: Security Group "CIDR vs ID" Trap
+The Fault: You added the Route Tables, but traffic is still timing out.
+
+The Fix: Look at the Security Groups. When you peer VPCs in the same region, you can actually reference the Security Group ID (e.g., sg-0abc123) of the peered VPC in your inbound rules. But if they are in different regions (Cross-Region Peering), you cannot use SG IDs; you must use the raw IP CIDR block in the Security Group rules.
+
+Trap 4: Transitive Peering is NOT Allowed
+The Scenario: VPC A is peered to VPC B. VPC B is peered to VPC C.
+
+The Fault: VPC A tries to talk to VPC C. It will fail.
+
+The Fix: VPC Peering is strictly 1-to-1. If A needs to talk to C, you must create a direct peering connection between A and C. (Or, use AWS Transit Gateway, which acts as a central hub).
+
+
 ## KMS Scenario
 A Lambda function triggers when a CSV file is uploaded to S3. Lambda must read the CSV file, but the S3 bucket is strictly encrypted with a KMS CMK. To process the data, Lambda also needs to authenticate with a 3rd-party API, so it must fetch an API key from Secrets Manager (which is also encrypted with the same KMS CMK).
 
