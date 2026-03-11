@@ -77,6 +77,119 @@ What the diagram shows: Lambda inside a VPC talking to RDS, and also talking to 
 
 What you must build: You must provision a NAT Gateway in a public subnet, or the Lambda will time out trying to reach the internet.
 
+## KMS Scenario
+A Lambda function triggers when a CSV file is uploaded to S3. Lambda must read the CSV file, but the S3 bucket is strictly encrypted with a KMS CMK. To process the data, Lambda also needs to authenticate with a 3rd-party API, so it must fetch an API key from Secrets Manager (which is also encrypted with the same KMS CMK).
+
+Step 1: The KMS Key Policy (The Vault Door)
+When you create your CMK in the console, you must tell the key who is allowed to use it. If the key policy doesn't explicitly allow your Lambda role, even an Administrator cannot use it.
+
+When editing the KMS Key Policy, you will see a "Statement" array. You must ensure your Lambda Execution Role is listed as a Key User.
+
+The Exact KMS Key Policy Snippet:
+
+```JSON
+{
+    "Sid": "Allow Lambda to use the CMK for Decryption",
+    "Effect": "Allow",
+    "Principal": {
+        "AWS": "arn:aws:iam::123456789012:role/MyLambdaExecutionRole"
+    },
+    "Action": [
+        "kms:Decrypt",
+        "kms:GenerateDataKey"
+    ],
+    "Resource": "*"
+}
+```
+(Note: kms:Decrypt lets Lambda read the S3 file and the Secret. kms:GenerateDataKey is required if Lambda ever needs to write a new file back to the encrypted S3 bucket).
+
+Step 2: The Lambda IAM Policy (The ID Badge)
+Even if the KMS Key says "Lambda is allowed," IAM still needs to say "Lambda is allowed." You must attach an inline policy (or managed customer policy) to your Lambda Execution Role.
+
+This is exactly what the judges look for to award maximum Security (Least Privilege) points. Do not use * for resources!
+
+The Exact Least-Privilege IAM Policy:
+
+```JSON
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "ReadEncryptedS3Data",
+            "Effect": "Allow",
+            "Action": "s3:GetObject",
+            "Resource": "arn:aws:s3:::my-secure-competition-bucket/*"
+        },
+        {
+            "Sid": "FetchEncryptedSecret",
+            "Effect": "Allow",
+            "Action": "secretsmanager:GetSecretValue",
+            "Resource": "arn:aws:secretsmanager:us-east-1:123456789012:secret:my-api-key-XXXXXX"
+        },
+        {
+            "Sid": "UseTheKMSKey",
+            "Effect": "Allow",
+            "Action": [
+                "kms:Decrypt",
+                "kms:GenerateDataKey"
+            ],
+            "Resource": "arn:aws:kms:us-east-1:123456789012:key/your-kms-key-id"
+        }
+    ]
+}
+```
+Step 3: The S3 & Secrets Manager Setup
+Secrets Manager: Create a new secret (Other type of secret -> Plaintext or Key/Value). In the "Encryption key" dropdown, do not select the default aws/secretsmanager key. Select your newly created CMK.
+
+S3 Bucket: Go to Properties -> Default Encryption. Select Server-side encryption with AWS KMS keys (SSE-KMS), and choose your custom CMK from the dropdown. Enable Bucket Keys (this saves money on KMS API calls, earning you FinOps points!).
+
+Step 4: The Lambda Code
+With the permissions perfectly aligned, the Python code doesn't actually need to know about KMS! AWS SDK (boto3) handles the decryption automatically because the IAM role has the right permissions.
+
+```Python
+import boto3
+import json
+
+s3_client = boto3.client('s3')
+secrets_client = boto3.client('secretsmanager')
+
+def lambda_handler(event, context):
+    try:
+        # 1. Fetch the Secret (KMS decrypts it seamlessly behind the scenes)
+        secret_response = secrets_client.get_secret_value(
+            SecretId='my-api-key'
+        )
+        api_key = secret_response['SecretString']
+        
+        # 2. Get the S3 Bucket and Object Key from the Event trigger
+        # (Assuming this Lambda is triggered by an S3 event)
+        bucket = event['Records'][0]['s3']['bucket']['name']
+        key = event['Records'][0]['s3']['object']['key']
+        
+        # 3. Read the S3 File (KMS decrypts it seamlessly behind the scenes)
+        s3_response = s3_client.get_object(Bucket=bucket, Key=key)
+        file_content = s3_response['Body'].read().decode('utf-8')
+        
+        print(f"Successfully decrypted file: {key}")
+        return {"statusCode": 200, "body": "Secure processing complete!"}
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        return {"statusCode": 500, "body": "Decryption or Access Failed"}
+```
+🚨 The "VPC Endpoint" KMS Trap (Crucial for Tomorrow)
+If your architecture diagram shows this Lambda function sitting inside a Private Subnet within a VPC, there is a massive trap waiting for you.
+
+When Lambda is in a VPC, it loses public internet access. To reach S3, you create an S3 VPC Gateway Endpoint. To reach Secrets Manager, you create a Secrets Manager VPC Interface Endpoint.
+
+The Trap: KMS is also a public AWS API! If your private Lambda tries to decrypt the secret or the S3 file, it will time out because it can't reach the KMS servers.
+The Fix: You must create a VPC Interface Endpoint for KMS (com.amazonaws.region.kms) in your VPC so your Lambda can privately ask KMS to decrypt the data!
+
+You now have the absolute highest tier of serverless security locked down. This covers IAM, KMS Resource Policies, Encryption at Rest, and least privilege.
+
+Is there any specific AWS service you haven't touched in a while that you want a quick 2-minute refresher on before you close the laptop for the night?
+
+
 
 ## Extra stuff
 1. The "Fault Finding" Matrix (The Holy Grail)
