@@ -1,3 +1,62 @@
+## The Golden Build Sequence (Order of Operations)
+When you look at the diagram tomorrow, ignore the arrows for a minute. You must build from the bottom up.
+
+Step 1: The Network Layer (The Foundation)
+You cannot put a database or a Lambda function in a secure network if the network doesn't exist yet.
+
+1st: Create the VPC and Subnets (if they aren't provided).
+
+2nd: Create VPC Endpoints (for S3, DynamoDB, or Secrets Manager if your compute is private).
+
+3rd: Create empty Security Groups. (Create lambda-sg, rds-sg, ec2-sg now. You can fill in the Inbound/Outbound rules later, but you need them to exist so you can reference them!)
+
+Step 2: The Data & Storage Layer (The Stateful Tier)
+Compute needs somewhere to read and write. Build these next so you can copy their ARNs and URLs.
+
+1st: Create S3 Buckets (Enable Versioning, configure BPA, add Lifecycle rules).
+
+2nd: Create DynamoDB Tables (Set partition keys, enable Target Tracking Auto Scaling).
+
+3rd: Create RDS Databases (Put them in private subnets, disable public access).
+
+Step 3: The Security & Configuration Layer (The Vault)
+Before you write a single line of code, you need the permissions and the secrets ready.
+
+1st: Create KMS Customer Managed Keys (CMKs).
+
+2nd: Store database passwords in Secrets Manager or API keys in SSM Parameter Store. (Encrypt them with your KMS keys).
+
+3rd: Create your IAM Execution Roles. (e.g., Create the Lambda role and attach the policies allowing it to read the Secrets, decrypt the KMS key, and write to DynamoDB).
+
+Step 4: The Compute Layer (The Engine)
+Now you build the brains, because you have all the pieces ready to plug into it.
+
+1st: Create the Lambda Functions.
+
+2nd: Attach the IAM Execution Role you made in Step 3.
+
+3rd: Attach the VPC and Security Groups you made in Step 1.
+
+4th: Add Environment Variables (paste the DynamoDB table names or S3 bucket names here).
+
+Step 5: The Decoupling Layer (The Pipes)
+Now you connect the storage and compute together.
+
+1st: Create SQS Queues (and their DLQs).
+
+2nd: Create SNS Topics (and subscribe the SQS queues to them).
+
+3rd: Create EventBridge Rules (and point them to your Lambda or SQS targets using the IAM Execution Role).
+
+Step 6: The Front Door (The Entrypoint)
+Finally, you expose the architecture to the judges or the users.
+
+1st: Create the API Gateway (Point it to your Lambda functions, enable CORS, enable caching).
+
+2nd: Create the Application Load Balancer (ALB) or CloudFront Distribution.
+
+
+## Extra stuff
 1. The "Fault Finding" Matrix (The Holy Grail)
 This is for when you are staring at a broken architecture and don't know where to start. Format it as "Symptom -> Culprit -> Fix".
 
@@ -37,12 +96,13 @@ Since there is minimal coding, you don't need full scripts, but you do need the 
 
 EC2 IMDSv2 Command: The exact curl command with the session token to fetch EC2 metadata (since they explicitly mentioned metadata).
 
-Bash
+```Bash
 # Fetch token
 TOKEN=`curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600"`
 # Use token to get metadata
 curl -H "X-aws-ec2-metadata-token: $TOKEN" -v http://169.254.169.254/latest/meta-data/
 SSM Parameter Store Fetch: The 4 lines of Python using WithDecryption=True.
+```
 
 Secrets Manager Fetch: The get_secret_value syntax.
 
