@@ -190,6 +190,17 @@ You now have the absolute highest tier of serverless security locked down. This 
 Is there any specific AWS service you haven't touched in a while that you want a quick 2-minute refresher on before you close the laptop for the night?
 
 
+## The Windows PowerShell Base64 Trick:
+
+```PowerShell
+# 1. Read the file into raw bytes
+$bytes = [System.IO.File]::ReadAllBytes("C:\path\to\your\userdata.sh")
+
+# 2. Convert to Base64 and save it to a new text file
+[Convert]::ToBase64String($bytes) | Out-File "C:\path\to\your\encoded-userdata.txt"
+```
+Now you can just open encoded-userdata.txt, copy the gibberish text, and paste it wherever the AWS API or CloudFormation template demands it!
+
 
 ## Extra stuff
 1. The "Fault Finding" Matrix (The Holy Grail)
