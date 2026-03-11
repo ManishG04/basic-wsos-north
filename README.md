@@ -56,6 +56,28 @@ Finally, you expose the architecture to the judges or the users.
 2nd: Create the Application Load Balancer (ALB) or CloudFront Distribution.
 
 
+## The "Invisible Diagram" Traps
+Architecture diagrams in competitions are intentionally incomplete. They show you the data flow, but they hide the security and networking glue. When you look at the diagram tomorrow, you must visualize the invisible lines.
+
+1. The Invisible IAM Line:
+
+What the diagram shows: An arrow pointing from S3 to Lambda to DynamoDB.
+
+What you must build: You must manually go to IAM and give Lambda a role with s3:GetObject and dynamodb:PutItem. The diagram won't tell you to do this; it's expected knowledge.
+
+2. The Invisible Security Group Line:
+
+What the diagram shows: An arrow from an EC2 instance to an RDS database.
+
+What you must build: You must go to the RDS Security Group and add an Inbound Rule allowing Port 3306/5432 from the EC2 Security Group.
+
+3. The Invisible "VPC Loss of Internet" Line:
+
+What the diagram shows: Lambda inside a VPC talking to RDS, and also talking to an external API.
+
+What you must build: You must provision a NAT Gateway in a public subnet, or the Lambda will time out trying to reach the internet.
+
+
 ## Extra stuff
 1. The "Fault Finding" Matrix (The Holy Grail)
 This is for when you are staring at a broken architecture and don't know where to start. Format it as "Symptom -> Culprit -> Fix".
