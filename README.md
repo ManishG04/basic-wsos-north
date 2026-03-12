@@ -320,3 +320,97 @@ Since you have access to Amazon Q, keep pre-written, highly specific prompts rea
 "How do I configure an EventBridge rule to catch an S3 object upload, but only if the file ends in .pdf, and format the output for an SQS queue?"
 
 "What is the most cost-effective and sustainable way to architecture [INSERT REQUIREMENT] using AWS serverless services?"
+
+
+
+
+## 1. The "Custom Event Bus" Trap (Read This First!)
+Before we build the S3 -> SNS -> SQS -> Lambda pipeline, I need to save you from a massive 0-point trap regarding EventBridge.
+
+Is it a best practice to make your own Custom Event Bus for S3?
+No! Absolutely not. Here is the golden rule of EventBridge: All AWS-native events (like an S3 upload, an EC2 crash, or a DynamoDB change) automatically and EXCLUSIVELY go to the default Event Bus. You cannot change this.
+
+If you create a "Custom Event Bus" and try to catch S3 events there, it will be dead silent.
+
+When DO you use a Custom Bus? You only use a custom bus when your own application code is generating custom events (e.g., your Lambda function sends a {"status": "Pizza Baked"} event).
+
+Always use the Default Bus for AWS service triggers!
+
+🌟 2. The S3 ➔ SNS ➔ SQS ➔ Lambda "Fanout" Architecture
+This is the holy grail of Reliability and Decoupling. It is called the Fanout Pattern. S3 shouts to SNS (the megaphone), SNS pushes the message to SQS (the shock absorber), and Lambda pulls from SQS at its own pace.
+
+If you are asked to build or troubleshoot this today, here is the exact step-by-step configuration and the hidden IAM traps between every single step. Add this to 04-Serverless-Gotchas.md.
+
+🔗 Link 1: S3 ➔ SNS Topic (The "Who is allowed to shout?" Trap)
+The Config: Go to S3 -> Properties -> Event Notifications. Set the event (e.g., s3:ObjectCreated:*) and choose your SNS Topic as the destination.
+
+🚨 The Fault Finding Trap (SNS Access Policy): S3 is not allowed to just publish to any SNS topic it wants. If this link is broken, go to the SNS Topic -> Access Policy. You MUST have a resource-based policy that allows the s3.amazonaws.com Service Principal to perform sns:Publish to that specific topic ARN.
+
+🔗 Link 2: SNS ➔ SQS Queue (The "Wrapper" Trap)
+The Config: Go to the SNS Topic -> Create Subscription. Choose SQS as the protocol, and select your SQS Queue ARN.
+
+🚨 The Fault Finding Trap 1 (SQS Access Policy): Just like S3, SNS needs permission to drop messages into SQS. Go to the SQS Queue -> Access Policy. It MUST have a statement allowing sns.amazonaws.com to perform sqs:SendMessage where the condition matches the SNS Topic ARN.
+
+🚨 The Fault Finding Trap 2 (Raw Message Delivery): When SNS sends a message to SQS, it wraps the S3 JSON inside another massive SNS JSON wrapper. This breaks Lambda code that isn't expecting it! Best Practice: When creating the SNS Subscription, check the box for Enable raw message delivery. This strips the SNS wrapper and sends the pure S3 event straight to SQS!
+
+🔗 Link 3: SQS ➔ Lambda (The "Visibility" Trap)
+The Config: Go to Lambda -> Configuration -> Triggers -> Add Trigger -> Select SQS. (Or go to SQS and configure it as a Lambda trigger).
+
+🚨 The Fault Finding Trap 1 (Visibility Timeout): We talked about this yesterday! If the SQS Visibility Timeout is 30 seconds, but your Lambda takes 45 seconds to process the file, the message becomes visible again, and a second Lambda grabs it. Fix: Ensure SQS Visibility Timeout is at least 6 times the Lambda timeout (AWS official best practice).
+
+🚨 The Fault Finding Trap 2 (Execution Role): Your Lambda function's IAM Role MUST have the AWSLambdaSQSQueueExecutionRole managed policy attached. It needs sqs:ReceiveMessage, sqs:DeleteMessage, and sqs:GetQueueAttributes. If it doesn't have these, Lambda cannot pull the messages off the queue.
+
+
+
+## EventBridge s3 to lambda
+**Step 1: The S3 "Hidden Toggle" Trap (Do this first!)
+By default, S3 buckets are completely silent. They do not talk to EventBridge. If you build an EventBridge rule without turning this on, your rule will sit there doing nothing forever.
+
+Go to the S3 Console.
+
+Click on your specific bucket.
+
+Click the Properties tab.
+
+Scroll down (past encryption and intelligent tiering) until you see Amazon EventBridge.
+
+Click Edit, toggle it to On, and click Save changes.
+(Boom. Your bucket is now shouting its events to the EventBridge central bus).
+
+🌉 Step 2: Create the EventBridge Rule
+Now you need to catch that shout and route it.
+
+Go to the Amazon EventBridge Console.
+
+Click Rules on the left menu, then click Create rule.
+
+Name it: s3-to-lambda-rule. Leave the Event Bus as default. Click Next.
+
+Event Source: Select AWS events or EventBridge partner events.
+
+Creation Method: Scroll down to the Event Pattern section. You can use the form to build it:
+
+Event source: AWS services
+
+AWS service: Simple Storage Service (S3)
+
+Event type: Amazon S3 Event Notification
+
+Event type specification 1: Select Object Created (or specific actions like PutObject).
+
+Event type specification 2: Select Specific bucket(s) by name and type your exact bucket name.
+
+Click Next.
+
+🎯 Step 3: Set the Target (Your Lambda)
+Now tell the rule where to send the data.
+
+Target type: Select AWS service.
+
+Select a target: Choose Lambda function from the dropdown.
+
+Function: Pick your exact Lambda function from the list.
+
+(Crucial IAM Note): If you do this through the AWS Console, EventBridge is smart enough to automatically attach a Resource-Based Policy to your Lambda function behind the scenes, granting EventBridge permission to invoke it.
+
+Click Next, skip tags, and click Create rule.**
